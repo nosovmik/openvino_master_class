@@ -3,8 +3,7 @@ cmake_minimum_required (VERSION 3.10)
 project(blur_background_demo)
 
 find_package(OpenCV  REQUIRED)
-add_definitions(-DUSE_OPENCV)
-find_package(InferenceEngine 2.0 REQUIRED)
+find_package(InferenceEngine 2021.4.2 REQUIRED)
 
 if(MSVC)
     add_definitions(-D_CRT_SECURE_NO_WARNINGS -DSCL_SECURE_NO_WARNINGS)
@@ -13,6 +12,7 @@ if(MSVC)
                         /EHsc)  # Enable standard C++ stack unwinding, assume functions with extern "C" never throw
 endif()
 
+set(OMZ_DEMO_DIR ${InferenceEngine_DIR}/../../open_model_zoo/demos)
 add_subdirectory(${OMZ_DEMO_DIR}/common/cpp/models models)
 add_subdirectory(${OMZ_DEMO_DIR}/common/cpp/utils utils)
 add_subdirectory(${OMZ_DEMO_DIR}/thirdparty/gflags gflags EXCLUDE_FROM_ALL)

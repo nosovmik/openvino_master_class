@@ -12,159 +12,161 @@
 const int DELETE = 0;
 const int BACKGROUND = 1;
 const int BLUR = 2;
-const int NONE = 2;
 
-cv::Mat replace_background(cv::Mat frame, cv::Mat background, SegmentationResult& segmentationResult)
+const int personLabel = 15;  // Masked background will have '15' value for pixel belonging to person
+
+cv::Mat replace_background(cv::Mat frame, cv::Mat background, const ImageResult& segmentationResult)
 {
-	auto mask = segmentationResult.mask;
+    auto mask = segmentationResult.resultImage;
 
-	cv::resize(background, background, frame.size());
+    cv::resize(background, background, frame.size());
 
-	const int personLabel = 15;
-	cv::Mat personMask = cv::Mat(mask.size(), mask.type(), 15);
-	cv::compare(mask, personMask, personMask, cv::CMP_EQ);
+    cv::Mat personMask = cv::Mat(mask.size(), mask.type(), personLabel);
+    cv::compare(mask, personMask, personMask, cv::CMP_EQ);
 
-	cv::Mat maskedFrame;
-	cv::bitwise_or(frame, frame, maskedFrame, personMask);
+    cv::Mat maskedFrame;
+    cv::bitwise_or(frame, frame, maskedFrame, personMask);
 
-	cv::Mat backgroundMask;
-	cv::bitwise_not(personMask, backgroundMask);
-	cv::Mat maskedBackground;
-	cv::bitwise_or(background, background, maskedBackground, backgroundMask);
+    cv::Mat backgroundMask;
+    cv::bitwise_not(personMask, backgroundMask);
+    cv::Mat maskedBackground;
+    cv::bitwise_or(background, background, maskedBackground, backgroundMask);
 
-	cv::bitwise_or(maskedFrame, maskedBackground, frame);
+    cv::bitwise_or(maskedFrame, maskedBackground, frame);
 
-	return frame;
+    return frame;
 }
 
 
-cv::Mat remove_background(cv::Mat frame, SegmentationResult& segmentationResult)
+cv::Mat remove_background(const cv::Mat& frame, const ImageResult& segmentationResult)
 {
-	auto mask = segmentationResult.mask;
+    auto mask = segmentationResult.resultImage;
 
+    cv::Mat personMask = cv::Mat(mask.size(), mask.type(), personLabel);
+    cv::compare(mask, personMask, personMask, cv::CMP_EQ);
 
-	const int personLabel = 15;
-	cv::Mat personMask = cv::Mat(mask.size(), mask.type(), 15);
-	cv::compare(mask, personMask, personMask, cv::CMP_EQ);
+    cv::Mat maskedFrame;
+    cv::bitwise_or(frame, frame, maskedFrame, personMask);
 
-	cv::Mat maskedFrame;
-	cv::bitwise_or(frame, frame, maskedFrame, personMask);
-
-	return maskedFrame;
+    return maskedFrame;
 }
 
-cv::Mat blur_background(cv::Mat frame, SegmentationResult& segmentationResult)
+cv::Mat blur_background(cv::Mat frame, const ImageResult& segmentationResult)
 {
-	auto mask = segmentationResult.mask;
+    auto mask = segmentationResult.resultImage;
 
-	const int personLabel = 15;
-	cv::Mat personMask = cv::Mat(mask.size(), mask.type(), 15);
-	cv::compare(mask, personMask, personMask, cv::CMP_EQ);
+    cv::Mat personMask = cv::Mat(mask.size(), mask.type(), personLabel);
+    cv::compare(mask, personMask, personMask, cv::CMP_EQ);
 
-	cv::Mat maskedFrame;
-	cv::bitwise_or(frame, frame, maskedFrame, personMask);
+    cv::Mat maskedFrame;
+    cv::bitwise_or(frame, frame, maskedFrame, personMask);
 
-	cv::Mat backgroundMask;
-	cv::bitwise_not(personMask, backgroundMask);
-	cv::Mat maskedBackground;
-	cv::bitwise_or(frame, frame, maskedBackground, backgroundMask);
+    cv::Mat backgroundMask;
+    cv::bitwise_not(personMask, backgroundMask);
+    cv::Mat maskedBackground;
+    cv::bitwise_or(frame, frame, maskedBackground, backgroundMask);
 
-	cv::Mat blurredBackground;
-	cv::blur(maskedBackground, blurredBackground, cv::Size(21, 21));
-	
-	cv::bitwise_or(maskedFrame, blurredBackground, frame);
+    cv::Mat blurredBackground;
+    cv::blur(maskedBackground, blurredBackground, cv::Size(21, 21));
 
-	return frame;
+    cv::bitwise_or(maskedFrame, blurredBackground, frame);
+
+    return frame;
 }
 
 int main(int argc, char *argv[])
 {
+    // Some hard-coded values. Change it to your paths (or get it from cmd args)
+    int cameraIndex = 0;
+    std::string backgroundPath = "c:\\blur\\test_background.jpg";
+    std::string modelPath = "c:\\blur\\public\\deeplabv3\\FP32\\deeplabv3.xml";
+    std::string cacheDir = "c:\\blur\\cache";
+    std::string device = "GPU";
 
-	std::string input = argv[1];
-	std::string backgroundPath = argv[2];
-	std::string model_path = argv[3];
+    cv::VideoCapture cap;
 
-	cv::VideoCapture cap;
+    try {
+        if (cap.open(cameraIndex)) {
+            cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+            cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+            cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+            cap.set(cv::CAP_PROP_AUTOFOCUS, true);
+            cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+        } else {
+            std::cout << "Camera is not opened, try some another value\n";
+            return -1;
+        }
+    }
+    catch (std::exception& ex) {
+        std::cout << "Failed to open camera " << ex.what() << std::endl;
+        return -1;
+    }
 
-	try {
-		if (cap.open(std::stoi(input))) {
-			cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-			cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
-			cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-			cap.set(cv::CAP_PROP_AUTOFOCUS, true);
-			cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
-		}
-	}
-	catch (const std::invalid_argument&) {} // If stoi conversion failed, let's try another way to open capture device
-	catch (const std::out_of_range&) {}
+    InferenceEngine::Core engine;
+    engine.SetConfig({{"CACHE_DIR", cacheDir}});
 
-	InferenceEngine::Core engine;
+    auto model = std::make_unique<SegmentationModel>(modelPath, true);
+    CnnConfig cnnConfig;
+    cnnConfig.devices = device;
+    auto execNetwork = model->loadExecutableNetwork(cnnConfig, engine);
 
-	ModelBase *model = new SegmentationModel(model_path, true);
-	InferenceEngine::CNNNetwork cnnNetwork = engine.ReadNetwork(model->getModelFileName());
+    std::string inputName  = model->getInputsNames()[0];
+    std::string outputName = model->getOutputsNames()[0];
 
-	model->prepareInputsOutputs(cnnNetwork);
+    InferenceEngine::InferRequest inferRequest = execNetwork.CreateInferRequest();
+       
+    cv::Mat background = cv::imread(backgroundPath);
 
-	std::string inputName  = model->getInputsNames()[0];
-	std::string outputName = model->getOutputsNames()[0];
+    PerformanceMetrics metrics;
 
-	InferenceEngine::ExecutableNetwork execNetwork = engine.LoadNetwork(cnnNetwork, "GPU");
+    int type = DELETE;
 
-	InferenceEngine::InferRequest inferRequest = execNetwork.CreateInferRequest();
-	   
-	cv::Mat background = cv::imread(backgroundPath);
+    while (cap.isOpened())
+    {
+        cv::Mat frame;
+        cap.read(frame);
 
-	PerformanceMetrics metrics;
+        InferenceEngine::Blob::Ptr imgBlob = wrapMat2Blob(frame);
+        inferRequest.SetBlob(inputName, imgBlob);
 
-	int type = DELETE;
+        inferRequest.Infer();
+        InferenceEngine::Blob::Ptr result = inferRequest.GetBlob(outputName);
 
-	while (cap.isOpened())
-	{
-		auto startTime = std::chrono::steady_clock::now();
+        auto result_mem = std::dynamic_pointer_cast<InferenceEngine::MemoryBlob>(result);
 
-		cv::Mat frame;
-		cap.read(frame);
+        InferenceResult inferenceResult;
+        inferenceResult.outputsData.emplace(outputName, result_mem);
+        inferenceResult.internalModelData = std::make_shared<InternalImageModelData>(frame.size[1], frame.size[0]);
 
-		InferenceEngine::Blob::Ptr imgBlob = wrapMat2Blob(frame);
-		inferRequest.SetBlob(inputName, imgBlob);
+        std::unique_ptr<ResultBase> segmentationResult = model->postprocess(inferenceResult);
+        
 
-		inferRequest.Infer();
-		InferenceEngine::Blob::Ptr result = inferRequest.GetBlob(outputName);
+        cv::Mat outFrame;
+        switch (type)
+        {
+        case DELETE:
+            outFrame = remove_background(frame, segmentationResult->asRef<ImageResult>());
+            break;
+        case BACKGROUND:
+            outFrame = replace_background(frame, background, segmentationResult->asRef<ImageResult>());
+            break;
+        case BLUR:
+            outFrame = blur_background(frame, segmentationResult->asRef<ImageResult>());
+            break;
+        default:
+            break;
+        }
 
-		InferenceResult inferenceResult;
-		inferenceResult.outputsData.emplace(outputName, 
-			std::make_shared<InferenceEngine::TBlob<float>>(*InferenceEngine::as<InferenceEngine::TBlob<float>>(result)));
-		inferenceResult.internalModelData = std::shared_ptr<InternalImageModelData>(new InternalImageModelData(frame.size[1], frame.size[0]));
-
-		std::unique_ptr<ResultBase> segmentationResult = model->postprocess(inferenceResult);
-		
-
-		cv::Mat outFrame;
-		switch (type)
-		{
-		case DELETE:
-			outFrame = remove_background(frame, segmentationResult->asRef<SegmentationResult>());
-			break;
-		case BACKGROUND:
-			outFrame = replace_background(frame, background, segmentationResult->asRef<SegmentationResult>());
-			break;
-		case BLUR:
-			outFrame = blur_background(frame, segmentationResult->asRef<SegmentationResult>());
-			break;
-		default:
-			break;
-		}
-		
-		metrics.update(startTime, outFrame, { 10, 22 }, cv::FONT_HERSHEY_COMPLEX, 0.65);
-		cv::imshow("Video", outFrame);
-		int key = cv::waitKey(1);
-		if (key == 27)
-			break;
-		if (key == 9)
-		{
-			type++;
-			if (type == NONE)
-				type = 0;
-		}
-	}
+        metrics.update(std::chrono::steady_clock::now(), outFrame, { 10, 22 }, cv::FONT_HERSHEY_COMPLEX, 0.65);
+        cv::imshow("Video", outFrame);
+        int key = cv::waitKey(1);
+        if (key == 27)
+            break;
+        if (key == 9)
+        {
+            type++;
+            if (type > BLUR)
+                type = 0;
+        }
+    }
 };

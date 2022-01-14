@@ -1,16 +1,20 @@
-# The OpenVINO toolkit master-class
+# The OpenVINO toolkit practice
 
 ## Preparation
 
+- Install Python 3.6/3.7/3.8 64-bit - it is needed for model downloading and converting to Intermediate Representation file (IR)
 - Install Visual Studio 2015/2017
 - Install latest CMake, either via following URL: https://github.com/Kitware/CMake/releases/download/v3.16.2/cmake-3.16.2-win64-x64.msi or via official website cmake.org
-- Install the OpenVINO toolkit https://software.intel.com/content/www/us/en/develop/tools/openvino-toolkit/choose-download.html
+- Install the OpenVINO toolkit:
+  - Download URL: https://www.intel.com/content/www/us/en/developer/tools/openvino-toolkit-download.html
+  - Distribution: online and offline
+  - Version: 2021 4.2 LTS (This is the latest available version which is used for this sample)
+  - Type: offline
+  - During installation - keep all checkboxes on (Inference Engine, Model Optimizer, Open Model Zoo, OpenCV) 
 - Clone this repository
-- Clone Open Model Zoo [repository](
 
-## How build project
 
-We will build project using CMake.
+## CMakelists.txt
 
 Setting minimum requirements:
 ```
@@ -24,16 +28,15 @@ project(blur_background_demo)
 
 Lets find necessary packages OpenCV and Inference Engine
 ```
-find_package(OpenCV  REQUIRED)
-add_definitions(-DUSE_OPENCV)
-find_package(InferenceEngine 2.0 REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(InferenceEngine 2021.4.2 REQUIRED)
 ```
 
-Add directories with utilities from Open Model Zoo (the OMZ_DEMO_DIR value we will set later):
+Add directories with utilities from Open Model Zoo:
 ```
+set(OMZ_DEMO_DIR ${InferenceEngine_DIR}/../../open_model_zoo/demos)
 add_subdirectory(${OMZ_DEMO_DIR}/common/cpp/models models)
 add_subdirectory(${OMZ_DEMO_DIR}/common/cpp/utils utils)
-add_subdirectory(${OMZ_DEMO_DIR}/thirdparty/gflags gflags EXCLUDE_FROM_ALL)
 ```
 
 Create our executable file:
@@ -43,19 +46,49 @@ add_executable(blur_background_demo blur_background_demo.cpp)
 
 Link additional libraries, such as OpenCV, Inference Engine, utility libraries from OMZ:
 ```
-target_link_libraries(blur_background_demo ${OpenCV_LIBRARIES} ${InferenceEngine_LIBRARIES} models utils gflags)
+target_link_libraries(blur_background_demo ${OpenCV_LIBRARIES} ${InferenceEngine_LIBRARIES} models utils)
 ```
 
-Then we can build our project using command (now we set OMZ_DEMO_DIR value with path to `<open_model_zoo>/demos`):
+## How to build project
+
+We will build project using CMake.
+
+To allow CMake find OpenVINO, we need to run 'setupvars.bat' script in command prompt for Visual Studio
+
 ```
-cmake -B <path/for/build> -DOMZ_DEMO_ZOO <path/to/omz>
+c:\Program Files (x86)\Intel\openvino_2021\bin\setupvars.bat
 ```
+
+If you don't get any warnings, you can create .sln file for Visual Studio
+
+```
+cmake -B <path/for/build>
+```
+
+Then you can open generated blur_background_demo.sln in Visual Studio
+
+## How to download pre-trained segmentation model
+
+In same terminal (where setupvars.bat was executed) run the following command:
+
+```
+c:\blur>python "%INTEL_OPENVINO_DIR%\deployment_tools\open_model_zoo\tools\downloader\downloader.py" --name deeplabv3
+```
+
+Once original model is downloaded, convert it to IR
+```
+c:\blur>python "%INTEL_OPENVINO_DIR%\deployment_tools\open_model_zoo\tools\downloader\converter.py" --name deeplabv3
+```
+
+After this you'll have the following files in c:\blur\public\deeplabv3\FP32: deeplabv3.xml, deeplabv3.bin, deeplabv3.mapping
+
+
 
 ## What about code
 
 ### What we use
 
-We need to include some modules, like standart modules:
+We need to include some modules, like standard modules:
 ```
 #include <iostream>
 #include <string>
@@ -80,30 +113,16 @@ for common utilities
 ```
 for fps counter
 
-### Application parameters
-
-We will use as little parameters as possible. We need to specify:
-- Camera id 
-- Path to background image
-- Path to model
-
-To simplify our code we won't use any utilities for command line parser and use `*argv[]` argument instead:
-```
-	std::string input = argv[1];
-	std::string backgroundPath = argv[2];
-	std::string model_path = argv[3];
-```
-
 ### Open video stream
 
-Now we ready to get access to web camera. In this code camera resolution is set to 1280x720, but you can specify your own if it is supported by camera. 
+Now we ready to get access to web camera. In this code camera resolution is set to 640x480, but you can specify your own if it is supported by camera.
 ```
 	cv::VideoCapture cap;
 
 	try {
 		if (cap.open(std::stoi(input))) {
-			cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-			cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+			cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+			cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
 			cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 			cap.set(cv::CAP_PROP_AUTOFOCUS, true);
 			cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
@@ -121,32 +140,25 @@ First we create engine:
 ```
 Then create model wrapper and read network from disk:
 ```
-	ModelBase *model = new SegmentationModel(model_path, true);
-	InferenceEngine::CNNNetwork cnnNetwork = engine.ReadNetwork(model->getModelFileName());
+	auto model = std::make_unique<SegmentationModel>(modelPath, true);
+	engine.SetConfig({{"CACHE_DIR", cache_dir}});
+
+    CnnConfig cnnConfig;
+    cnnConfig.devices = "CPU";
+    auto execNetwork = model->loadExecutableNetwork(cnnConfig, engine);
 ```
+
 Get input and output layer (we use model with single input and output):
 ```
-	model->prepareInputsOutputs(cnnNetwork);
-
 	std::string inputName  = model->getInputsNames()[0];
 	std::string outputName = model->getOutputsNames()[0];
 ```
-Load model to device (in this example we will load model to GPU, but could also load it to CPU):
-```
-	InferenceEngine::ExecutableNetwork execNetwork = engine.LoadNetwork(cnnNetwork, "GPU");
-```
+
 Create inference request (later we will use it to launch our model):
 ```
 	InferenceEngine::InferRequest inferRequest = execNetwork.CreateInferRequest();
 ```
 
-
-	   
-	cv::Mat background = cv::imread(backgroundPath);
-
-	PerformanceMetrics metrics;
-
-	int type = DELETE;
     
 ### Main cycle
 
@@ -178,12 +190,6 @@ After setting data we can launch our model and get result:
 		InferenceEngine::Blob::Ptr result = inferRequest.GetBlob(outputName);
 ```
 
-
-		InferenceResult inferenceResult;
-		inferenceResult.outputsData.emplace(outputName, 
-			std::make_shared<InferenceEngine::TBlob<float>>(*InferenceEngine::as<InferenceEngine::TBlob<float>>(result)));
-		inferenceResult.internalModelData = std::shared_ptr<InternalImageModelData>(new InternalImageModelData(frame.size[1], frame.size[0]));
-
 Then model gives us result, it often need some postprocessing (e.g. resize it to frame size). Class `SegmentationModel` already has it and we can use it.
 ```
 		std::unique_ptr<ResultBase> segmentationResult = model->postprocess(inferenceResult);
@@ -194,13 +200,13 @@ Now we ready to process our frame with segmentation mask and perform necessary t
 		switch (type)
 		{
 		case DELETE:
-			outFrame = remove_background(frame, segmentationResult->asRef<SegmentationResult>());
+			outFrame = remove_background(frame, segmentationResult->asRef<ImageResult>());
 			break;
 		case BACKGROUND:
-			outFrame = remove_background(frame, background, segmentationResult->asRef<SegmentationResult>());
+			outFrame = remove_background(frame, background, segmentationResult->asRef<ImageResult>());
 			break;
 		case BLUR:
-			outFrame = blur_background(frame, segmentationResult->asRef<SegmentationResult>());
+			outFrame = blur_background(frame, segmentationResult->asRef<ImageResult>());
 			break;
 		default:
 			break;
@@ -229,7 +235,7 @@ That's all.
 
 Above we note few transformation functions, now we define one of them, `replace_background`. This function will find a person on the `frame` using `mask` and replace `background`.
 ```
-cv::Mat remove_background(cv::Mat frame, cv::Mat background, SegmentationResult& segmentationResult)
+cv::Mat remove_background(cv::Mat frame, cv::Mat background, const SegmentationResult& segmentationResult)
 ```
 Because size of frame and background could differ, we should make them equal:
 ``` 
@@ -238,7 +244,7 @@ Because size of frame and background could differ, we should make them equal:
 The segmentation model we used, has multiple classes, not only person. But we not interested in other classes. So we need to get rid of all other classes except person. We need to know id of our class (`15` for suggested model) which can help perform masking.
 ```
 	const int personLabel = 15;
-	cv::Mat personMask = cv::Mat(mask.size(), mask.type(), 15);
+	cv::Mat personMask = cv::Mat(mask.size(), mask.type(), personLabel);
 	cv::compare(mask, personMask, personMask, cv::CMP_EQ);
 ```
 After it we can mask our frame and higlight only person:
